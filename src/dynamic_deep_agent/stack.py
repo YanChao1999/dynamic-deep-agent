@@ -1,8 +1,8 @@
 """Generic LIFO stacks used by the harness.
 
-Two stacks play different roles:
+Two stacks play different roles in the DFS agent:
 
-* :class:`WorkStack` — agent planning / execution (push = plan, pop = do)
+* :class:`WorkStack` — agent work (push = plan deeper, pop = do top)
 * :class:`ToolCallStack` — nested tool invocations (call / return)
 """
 
@@ -83,10 +83,3 @@ class WorkStack(Stack["WorkFrame"]):
 
 class ToolCallStack(Stack["ToolFrame"]):
     """Stack of in-flight tool calls (nested call / return)."""
-
-
-# Late import for type hints only — avoid circular import at runtime.
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .frames import ToolFrame, WorkFrame

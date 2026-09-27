@@ -1,83 +1,101 @@
-"""Tests for the stack-based agent harness loop."""
+"""Tests for the DFS agent harness loop."""
 
 from dynamic_deep_agent import (
     AgentHarness,
     FrameKind,
     HarnessConfig,
     ToolRegistry,
-    WorkFrame,
+    do,
+    plan,
     tool,
 )
 from dynamic_deep_agent.builtins import EchoActor, RulePlanner, StaticPlanner
 
 
-def test_empty_after_plan_and_actions():
-    plan = [
-        WorkFrame(kind=FrameKind.ACTION, description="one"),
-        WorkFrame(kind=FrameKind.ACTION, description="two"),
-        WorkFrame(kind=FrameKind.ACTION, description="three"),
+def test_dfs_plan_then_do():
+    plan_frames = [
+        do("one"),
+        do("two"),
+        do("three"),
     ]
     harness = AgentHarness(actor=EchoActor())
-    result = harness.run("demo", initial_plan=plan)
+    result = harness.run("demo", initial_plan=plan_frames)
     assert result.success
     assert result.steps == 3
     assert result.result == "three"
+    assert result.context.results == ["one", "two", "three"]
     assert harness.work.empty()
 
 
-def test_goal_planner_pushes_children():
-    def plan(frame, context):
-        return [
-            WorkFrame(kind=FrameKind.ACTION, description="A"),
-            WorkFrame(kind=FrameKind.ACTION, description="B"),
-        ]
+def test_goal_planner_pushes_children_dfs():
+    def plan_fn(frame, context):
+        return [do("A"), do("B")]
 
-    harness = AgentHarness(planner=RulePlanner(plan), actor=EchoActor())
+    harness = AgentHarness(planner=RulePlanner(plan_fn), actor=EchoActor())
     result = harness.run("root-goal")
     assert result.success
-    # GOAL plan step + 2 actions
+    # root PLAN + 2 DOs
     assert result.steps == 3
     assert result.result == "B"
+    assert result.context.results == ["A", "B"]
 
 
-def test_tool_action_and_reduce():
+def test_nested_plan_is_dfs():
+    """Nested PLAN runs before the sibling DO (depth-first)."""
+    order: list[str] = []
+
+    def plan_fn(frame, context):
+        if frame.description == "root-goal":
+            return [
+                plan("nested"),
+                do("sibling"),
+            ]
+        if frame.description == "nested":
+            return [do("deep")]
+        return []
+
+    class RecordingActor(EchoActor):
+        def act(self, frame, context):
+            order.append(frame.description)
+            return frame.description
+
+    harness = AgentHarness(planner=RulePlanner(plan_fn), actor=RecordingActor())
+    result = harness.run("root-goal")
+    assert result.success
+    assert order == ["deep", "sibling"]
+
+
+def test_tool_do_with_dollar_refs():
     reg = ToolRegistry()
 
     @tool(name="add")
     def add(a: int, b: int) -> int:
         return a + b
 
+    @tool(name="mul")
+    def mul(a: int, b: int) -> int:
+        return a * b
+
     reg.register(add)
-    plan = [
-        WorkFrame(
-            kind=FrameKind.ACTION,
-            description="add",
-            payload={"tool": "add", "args": {"a": 2, "b": 3}, "store_as": "s"},
-        ),
-        WorkFrame(
-            kind=FrameKind.VALUE,
-            description="literal 4",
-            payload={"key": "t", "value": 4},
-        ),
-        WorkFrame(
-            kind=FrameKind.REDUCE,
-            description="sum s+t",
-            payload={"op": "sum", "keys": ["s", "t"], "store_as": "out"},
-        ),
+    reg.register(mul)
+
+    frames = [
+        do("add", tool="add", args={"a": 2, "b": 3}, store_as="sum"),
+        do("mul", tool="mul", args={"a": "$sum", "b": 4}, store_as="out"),
     ]
     harness = AgentHarness(tools=reg)
-    result = harness.run("2+3+4", initial_plan=plan)
+    result = harness.run("(2+3)*4", initial_plan=frames)
     assert result.success
-    assert result.context.get_value("out") == 9
+    assert result.result == 20
+    assert result.context.get_value("out") == 20
 
 
 def test_max_steps_aborts():
-    # Infinite re-plan: every PLAN pushes another PLAN
-    def plan(frame, context):
-        return [WorkFrame(kind=FrameKind.PLAN, description="again")]
+    def plan_fn(frame, context):
+        return [plan("again")]
 
     harness = AgentHarness(
-        planner=RulePlanner(plan),
+        planner=RulePlanner(plan_fn),
         config=HarnessConfig(max_steps=5),
     )
     result = harness.run("loop")
@@ -94,16 +112,12 @@ def test_stop_on_failure():
         raise ValueError("fail")
 
     reg.register(boom)
-    plan = [
-        WorkFrame(
-            kind=FrameKind.ACTION,
-            description="boom",
-            payload={"tool": "boom"},
-        ),
-        WorkFrame(kind=FrameKind.ACTION, description="never"),
+    frames = [
+        do("boom", tool="boom"),
+        do("never"),
     ]
     harness = AgentHarness(tools=reg, actor=EchoActor())
-    result = harness.run("x", initial_plan=plan)
+    result = harness.run("x", initial_plan=frames)
     assert not result.success
     assert result.error == "fail"
     assert len(result.remaining) == 1
@@ -111,10 +125,14 @@ def test_stop_on_failure():
 
 
 def test_static_planner():
-    children = [
-        WorkFrame(kind=FrameKind.ACTION, description="x"),
-    ]
+    children = [do("x")]
     harness = AgentHarness(planner=StaticPlanner(children), actor=EchoActor())
     result = harness.run("g")
     assert result.success
     assert result.result == "x"
+
+
+def test_only_plan_and_do_kinds():
+    assert {k.value for k in FrameKind} == {"plan", "do"}
+    assert plan("p").kind is FrameKind.PLAN
+    assert do("d").kind is FrameKind.DO

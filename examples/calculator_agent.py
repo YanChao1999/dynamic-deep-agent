@@ -1,18 +1,13 @@
-"""Calculator-style demo: evaluate (2 + 3) * 4 via push/pop.
+"""DFS demo: evaluate (2 + 3) * 4 by plan → push, do → pop.
 
-Like RPN: push operands as VALUE frames, push operators as REDUCE frames,
-push leaf computations as ACTION frames. The work stack empties when done.
+No reduce step — each DO stores its result; the next DO reads it via $name.
+When the stack is empty, the last DO result is the answer.
 """
 
 from __future__ import annotations
 
-from dynamic_deep_agent import (
-    AgentHarness,
-    FrameKind,
-    ToolRegistry,
-    WorkFrame,
-    tool,
-)
+from dynamic_deep_agent import AgentHarness, ToolRegistry, do, tool
+from dynamic_deep_agent.builtins import RulePlanner
 
 
 @tool(description="Add two numbers.")
@@ -25,55 +20,25 @@ def mul(a: float, b: float) -> float:
     return a * b
 
 
-def build_expression_plan() -> list[WorkFrame]:
-    """Plan for (2 + 3) * 4.
+def make_planner() -> RulePlanner:
+    def plan_fn(frame, context):
+        # Root PLAN → push DO add, then DO mul (DFS: add runs first).
+        return [
+            do(
+                "compute 2 + 3",
+                tool="add",
+                args={"a": 2, "b": 3},
+                store_as="sum",
+            ),
+            do(
+                "multiply sum by 4",
+                tool="mul",
+                args={"a": "$sum", "b": 4},
+                store_as="product",
+            ),
+        ]
 
-    Execution order (pop order):
-      1. ACTION add(2,3) → store as 'sum'
-      2. ACTION mul(sum, 4) — but mul needs the value, so we use REDUCE after
-         storing both factors, OR chain via store_as.
-
-    Simpler chain using store_as:
-      add → sum, then mul(sum, 4) → product
-    """
-    return [
-        WorkFrame(
-            kind=FrameKind.ACTION,
-            description="compute 2 + 3",
-            payload={"tool": "add", "args": {"a": 2, "b": 3}, "store_as": "sum"},
-        ),
-        WorkFrame(
-            kind=FrameKind.ACTION,
-            description="multiply sum by 4",
-            payload={
-                "tool": "mul",
-                "args": {"a": "__sum__", "b": 4},  # placeholder resolved below
-                "store_as": "product",
-            },
-        ),
-        WorkFrame(
-            kind=FrameKind.REDUCE,
-            description="return product",
-            payload={"op": "identity", "keys": ["product"], "store_as": "answer"},
-        ),
-    ]
-
-
-class ResolvingHarness(AgentHarness):
-    """Harness that resolves ``__key__`` args from context.values before tool calls."""
-
-    def _handle_action(self, frame, context):  # type: ignore[no-untyped-def]
-        tool_name = frame.payload.get("tool")
-        if tool_name:
-            args = {}
-            for k, v in (frame.payload.get("args") or {}).items():
-                if isinstance(v, str) and v.startswith("__") and v.endswith("__"):
-                    args[k] = context.get_value(v[2:-2])
-                else:
-                    args[k] = v
-            # mutate a shallow copy so the original plan stays readable in traces
-            frame.payload = {**frame.payload, "args": args}
-        return super()._handle_action(frame, context)
+    return RulePlanner(plan_fn)
 
 
 def main() -> None:
@@ -81,14 +46,14 @@ def main() -> None:
     registry.register(add)
     registry.register(mul)
 
-    harness = ResolvingHarness(tools=registry)
-    result = harness.run("(2 + 3) * 4", initial_plan=build_expression_plan())
+    harness = AgentHarness(tools=registry, planner=make_planner())
+    result = harness.run("(2 + 3) * 4")
 
     print("success:", result.success)
     print("steps:", result.steps)
-    print("answer:", result.context.get_value("answer"))
+    print("answer:", result.result)
     print("values:", result.context.values)
-    print("--- trace ---")
+    print("--- DFS trace (pop order) ---")
     for event in result.context.trace:
         frame = event.get("frame", {})
         print(

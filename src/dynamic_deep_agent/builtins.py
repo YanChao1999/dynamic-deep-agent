@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from .frames import FrameKind, WorkFrame
+from .frames import WorkFrame
 from .harness import HarnessContext
 
 
 class StaticPlanner:
-    """Planner that returns a fixed decomposition for any GOAL/PLAN."""
+    """Planner that always returns the same child list."""
 
     def __init__(self, children: list[WorkFrame]) -> None:
         self.children = children
 
     def plan(self, frame: WorkFrame, context: HarnessContext) -> list[WorkFrame]:
-        planned = []
+        planned: list[WorkFrame] = []
         for child in self.children:
             planned.append(
                 WorkFrame(
@@ -36,9 +37,11 @@ class EchoActor:
 
 
 class RulePlanner:
-    """Planner driven by a callable ``goal -> list[WorkFrame]``."""
+    """Planner driven by a callable ``(frame, context) -> list[WorkFrame]``."""
 
-    def __init__(self, fn: Any) -> None:
+    def __init__(
+        self, fn: Callable[[WorkFrame, HarnessContext], list[WorkFrame]]
+    ) -> None:
         self.fn = fn
 
     def plan(self, frame: WorkFrame, context: HarnessContext) -> list[WorkFrame]:

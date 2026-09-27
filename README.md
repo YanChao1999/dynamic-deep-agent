@@ -1,29 +1,28 @@
 # Dynamic Deep Agent
 
-Stack-based agent **harness**: the agent plans by **pushing** work onto a stack, **pops** the top item to do it, and finishes when the stack is **empty**.
-
-Push and pop mean two related things — the same LIFO idea as a calculator:
-
-| Stack | Push means | Pop means |
-|-------|------------|-----------|
-| **Work stack** | Plan / enqueue a goal, subtask, or value | Start doing that work |
-| **Tool-call stack** | Enter a tool invocation | Return from the tool |
+DFS stack agent **harness**: **plan** by pushing, **do** by popping, finish when the stack is empty and you have a result.
 
 ```
-goal
-  └─ push PLAN ─────────────────────────────┐
-       pop PLAN → push [A, B, REDUCE]       │  work stack
-       pop A    → tool call (push/pop)      │
-       pop B    → tool call (push/pop)      │
-       pop REDUCE → combine values          │
-  stack empty → task finished ──────────────┘
+push GOAL (PLAN)
+   │
+   ▼
+pop PLAN ──► push [child1, child2, ...]     ← go deeper (DFS)
+   │
+   ▼
+pop DO    ──► run tool / actor → result
+   │
+   ▼
+… repeat until stack empty → last DO result
 ```
 
-## Why a stack?
+Only two work kinds:
 
-- **Depth-first** decomposition: the freshest subtask runs next (like a call stack).
-- **Calculator-shaped** control flow: operands (`VALUE`), operators (`ACTION` / `REDUCE`), expression complete when nothing remains.
-- **Nested tools** are honest: the tool-call stack mirrors real call/return, including failures that still pop.
+| Kind | Meaning |
+|------|---------|
+| `PLAN` | Pop → decompose → **push** children (first child runs next) |
+| `DO` | Pop → execute tool/actor → keep result |
+
+Push/pop also apply to the **tool-call stack** (enter tool / return).
 
 ## Install
 
@@ -34,7 +33,8 @@ pip install -e ".[dev]"
 ## Quick start
 
 ```python
-from dynamic_deep_agent import AgentHarness, FrameKind, ToolRegistry, WorkFrame, tool
+from dynamic_deep_agent import AgentHarness, ToolRegistry, do, tool
+from dynamic_deep_agent.builtins import RulePlanner
 
 @tool(description="Add two numbers")
 def add(a: int, b: int) -> int:
@@ -43,44 +43,27 @@ def add(a: int, b: int) -> int:
 registry = ToolRegistry()
 registry.register(add)
 
-plan = [
-    WorkFrame(
-        kind=FrameKind.ACTION,
-        description="2+3",
-        payload={"tool": "add", "args": {"a": 2, "b": 3}, "store_as": "sum"},
-    ),
-    WorkFrame(
-        kind=FrameKind.REDUCE,
-        description="return sum",
-        payload={"op": "identity", "keys": ["sum"]},
-    ),
-]
+def plan_fn(frame, context):
+    return [
+        do("2+3", tool="add", args={"a": 2, "b": 3}, store_as="sum"),
+        do("reuse", tool="add", args={"a": "$sum", "b": 0}),
+    ]
 
-harness = AgentHarness(tools=registry)
-result = harness.run("2+3", initial_plan=plan)
-assert result.success
-assert result.context.get_value("sum") == 5
+harness = AgentHarness(tools=registry, planner=RulePlanner(plan_fn))
+result = harness.run("2+3")
+assert result.success and result.result == 5
 assert harness.work.empty()
 ```
 
-## Frame kinds
-
-| Kind | Role |
-|------|------|
-| `GOAL` | Root objective; planner pushes a decomposition |
-| `PLAN` | Intermediate plan node; may push more children |
-| `ACTION` | Concrete step — tool call or actor |
-| `VALUE` | Store an operand / intermediate result |
-| `REDUCE` | Combine stored values (sum, concat, …) |
-| `DONE` | Explicit finish marker for a sub-goal |
+`$name` in tool args resolves from results stored with `store_as`.
 
 ## Loop
 
-1. `run(goal)` pushes a `GOAL` (or an `initial_plan`).
-2. While the work stack is not empty: **pop** → dispatch by kind.
-3. `GOAL`/`PLAN` → planner **pushes** children (first child on top).
-4. `ACTION` → tool registry **pushes/pops** the tool-call stack.
-5. Empty work stack → `HarnessResult.success`.
+1. `run(goal)` pushes a root `PLAN` (or an `initial_plan`).
+2. While the work stack is not empty: **pop**.
+3. `PLAN` → planner **pushes** children (DFS: newest / first child first).
+4. `DO` → tool registry **pushes/pops** the tool-call stack; result is kept.
+5. Empty work stack → `HarnessResult` with the last `DO` result.
 
 ## Examples
 
@@ -101,8 +84,8 @@ pytest
 ```
 src/dynamic_deep_agent/
   stack.py      # WorkStack, ToolCallStack
-  frames.py     # WorkFrame, ToolFrame, FrameKind
+  frames.py     # PLAN / DO (+ tool frames)
   tools.py      # ToolRegistry with call-stack push/pop
-  harness.py    # AgentHarness main loop
+  harness.py    # DFS AgentHarness loop
   builtins.py   # Small planners/actors for demos
 ```

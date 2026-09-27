@@ -1,21 +1,14 @@
-"""Research-style demo: plan pushes subtasks, pop executes them depth-first.
+"""DFS research demo: PLAN pushes children, DO runs tools, until result.
 
-Shows the agent work stack (plan/do) and the tool-call stack (nested calls).
+Depth-first: the agent always pops the newest frame, so nested PLANs go
+deep before siblings. Tool calls use their own push/pop stack.
 """
 
 from __future__ import annotations
 
-from dynamic_deep_agent import (
-    AgentHarness,
-    FrameKind,
-    ToolRegistry,
-    WorkFrame,
-    tool,
-)
+from dynamic_deep_agent import AgentHarness, ToolRegistry, do, plan, tool
 from dynamic_deep_agent.builtins import RulePlanner
 
-
-# --- fake tools -------------------------------------------------------------
 
 DOCS = {
     "stack": "A stack is LIFO: last in, first out. Push adds, pop removes.",
@@ -34,78 +27,34 @@ def join_notes(parts: list[str], sep: str = " | ") -> str:
     return sep.join(parts)
 
 
-def make_planner():
-    def plan(frame: WorkFrame, context):
-        # GOAL → PLAN research three topics, then REDUCE into a summary.
-        if frame.kind is FrameKind.GOAL:
-            return [
-                WorkFrame(
-                    kind=FrameKind.PLAN,
-                    description="research topics then summarize",
-                    payload={"topics": ["stack", "agent", "harness"]},
-                )
-            ]
-        if frame.kind is FrameKind.PLAN:
-            topics = frame.payload.get("topics") or []
-            actions = [
-                WorkFrame(
-                    kind=FrameKind.ACTION,
-                    description=f"lookup {topic}",
-                    payload={
-                        "tool": "lookup",
-                        "args": {"topic": topic},
-                        "store_as": f"note_{topic}",
-                    },
-                )
+def make_planner() -> RulePlanner:
+    def plan_fn(frame, context):
+        if frame.description.startswith("research "):
+            # Nested PLAN: go deep on "research topics" before summarizing.
+            topics = frame.payload.get("topics") or ["stack", "agent", "harness"]
+            children = [
+                do(f"lookup {topic}", tool="lookup", args={"topic": topic}, store_as=f"note_{topic}")
                 for topic in topics
             ]
-            actions.append(
-                WorkFrame(
-                    kind=FrameKind.ACTION,
-                    description="join notes",
-                    payload={
-                        "tool": "join_notes",
-                        "args": {
-                            "parts": [f"note_{t}" for t in topics],
-                        },
-                        "store_as": "summary",
-                        "resolve_parts": True,
-                    },
+            children.append(
+                do(
+                    "join notes",
+                    tool="join_notes",
+                    args={"parts": [f"$note_{t}" for t in topics]},
+                    store_as="summary",
                 )
             )
-            actions.append(
-                WorkFrame(
-                    kind=FrameKind.DONE,
-                    description="finished research",
-                    payload={"value_key": "summary"},
-                )
+            return children
+
+        # Root goal → one nested PLAN (DFS enters it immediately).
+        return [
+            plan(
+                "research topics",
+                topics=["stack", "agent", "harness"],
             )
-            return actions
-        return []
+        ]
 
-    return RulePlanner(plan)
-
-
-class ResearchHarness(AgentHarness):
-    """Resolves note keys inside join_notes and DONE frames."""
-
-    def _handle_action(self, frame, context):  # type: ignore[no-untyped-def]
-        if frame.payload.get("resolve_parts"):
-            keys = frame.payload.get("args", {}).get("parts") or []
-            parts = [context.get_value(k, k) for k in keys]
-            frame.payload = {
-                **frame.payload,
-                "args": {**frame.payload.get("args", {}), "parts": parts},
-            }
-        return super()._handle_action(frame, context)
-
-    def _dispatch(self, frame, context):  # type: ignore[no-untyped-def]
-        if frame.kind is FrameKind.DONE:
-            key = frame.payload.get("value_key")
-            if key:
-                value = context.get_value(key)
-                frame.payload = {**frame.payload, "value": value}
-        return super()._dispatch(frame, context)
+    return RulePlanner(plan_fn)
 
 
 def main() -> None:
@@ -114,13 +63,12 @@ def main() -> None:
     registry.register(join_notes)
 
     def on_step(frame, context):
-        tool_depth = context.tools.call_stack.depth
         print(
-            f"→ pop {frame.kind.value:6} | {frame.description} "
-            f"(work_depth_after_pop will shrink; tool_depth={tool_depth})"
+            f"→ pop {frame.kind.value:4} | {frame.description} "
+            f"(remaining_depth={context.tools.call_stack.depth})"
         )
 
-    harness = ResearchHarness(
+    harness = AgentHarness(
         tools=registry,
         planner=make_planner(),
         on_step=on_step,
@@ -130,8 +78,8 @@ def main() -> None:
     print()
     print("success:", result.success)
     print("steps:", result.steps)
-    print("summary:", result.context.get_value("summary"))
-    print("final result:", result.result)
+    print("result:", result.result)
+    assert result.result == result.context.get_value("summary")
 
 
 if __name__ == "__main__":

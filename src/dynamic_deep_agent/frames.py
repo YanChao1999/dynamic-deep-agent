@@ -13,23 +13,17 @@ def _new_id() -> str:
 
 
 class FrameKind(str, Enum):
-    """Kinds of work a frame can represent.
+    """DFS work kinds — only plan and do.
 
-    Mirrors calculator semantics:
+    * ``PLAN`` — decompose: pop this frame, **push** children (go deeper)
+    * ``DO`` — leaf work: pop this frame, run a tool/actor, keep the result
 
-    * ``GOAL`` / ``PLAN`` — push a decomposition (like entering an expression)
-    * ``ACTION`` — pop and run a concrete step (like an operator)
-    * ``VALUE`` — intermediate result left for a later reduce (operand)
-    * ``REDUCE`` — combine prior values into one result
-    * ``DONE`` — sentinel that a sub-goal finished
+    The agent is depth-first: the most recently pushed child runs next.
+    When the work stack is empty, the run finishes with the last result.
     """
 
-    GOAL = "goal"
     PLAN = "plan"
-    ACTION = "action"
-    VALUE = "value"
-    REDUCE = "reduce"
-    DONE = "done"
+    DO = "do"
 
 
 @dataclass
@@ -95,3 +89,13 @@ class ToolFrame:
             "status": self.status,
             "result": self.result,
         }
+
+
+def plan(description: str, **payload: Any) -> WorkFrame:
+    """Shorthand for a PLAN frame."""
+    return WorkFrame(kind=FrameKind.PLAN, description=description, payload=payload)
+
+
+def do(description: str, **payload: Any) -> WorkFrame:
+    """Shorthand for a DO frame."""
+    return WorkFrame(kind=FrameKind.DO, description=description, payload=payload)
