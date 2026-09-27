@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dynamic-deep-agent"
-version = "0.3.0"
-description = "RPN-style stack agent harness: decide from stack+top to pop+execute or plan+push."
+version = "0.4.0"
+description = "RPN stack agent harness with OpenAI-style LLM control and token summaries."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from .controller import Controller, Decision, KindController, Move
 from .frames import FrameKind, WorkFrame, goal as goal_frame
+from .llm import TokenUsage
 from .stack import Stack, WorkStack
 from .tools import ToolRegistry
 
@@ -61,6 +62,9 @@ class HarnessContext:
     results: list[Any] = field(default_factory=list)
     trace: list[dict[str, Any]] = field(default_factory=list)
     last_summary: str = ""
+    # LLM token summaries of the stack at each decide/plan step.
+    summaries: list[dict[str, Any]] = field(default_factory=list)
+    token_usage: TokenUsage = field(default_factory=TokenUsage)
 
     def store_value(self, key: str, value: Any) -> None:
         self.values[key] = value
@@ -201,10 +205,12 @@ class AgentHarness:
                         "step": steps,
                         "decision": decision.as_dict(),
                         "top": top.as_dict(),
+                        "summary": decision.summary or context.last_summary,
                         "result": last_result if decision.move is Move.POP_EXECUTE else None,
                         "work_depth": self.work.depth,
                         "value_depth": self.values.depth,
                         "tool_depth": self.tools.call_stack.depth,
+                        "token_usage": context.token_usage.as_dict(),
                     }
                 )
 

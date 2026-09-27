@@ -1,33 +1,24 @@
 # Dynamic Deep Agent
 
-RPN-style stack agent **harness**: each step the agent looks at the **work stack** and **top**, then chooses:
+RPN-style stack agent **harness**: each step look at the **work stack** and **top**, then choose:
 
 | Move | When | What happens |
 |------|------|----------------|
-| **pop + execute** | top is `VALUE` or `OP` | pop it; `VALUE` → value stack; `OP` → pop arity operands, run, push result |
-| **summary + plan + push** | top is `GOAL` | summarize stack situation, plan tokens, push them |
+| **pop + execute** | top is `VALUE` / `OP` | pop; `VALUE` → value stack; `OP` pops arity, runs, pushes result |
+| **summary + plan + push** | top is `GOAL` | **token summary** of the stack → plan → push |
 
-When the work stack is empty, the **value stack** top is the answer.
+OpenAI-style LLM controllers produce the token summary and the move (and optional frames). Token usage is tracked on `context.token_usage`.
 
 ```
 work:  [ … | top ]          value: [ operands … ]
               │
               ▼
-     controller.decide(stack, top)
-         │              │
-         │              └─ PLAN_PUSH → summary → plan → push
-         └─ POP_EXECUTE → pop top → execute
+     LLMController.decide(stack, top)
+         │  1) summarize stack tokens
+         │  2) choose move
+         ├─ PLAN_PUSH → plan frames → push
+         └─ POP_EXECUTE → pop + execute
 ```
-
-## Tokens
-
-| Kind | Role |
-|------|------|
-| `GOAL` | Needs expansion (plan) |
-| `VALUE` | Operand / literal |
-| `OP` | Operator / tool call (`arity`, `tool`, `arg_names`, …) |
-
-`plan` / `do` are aliases for `goal` / `op`.
 
 ## Install
 
@@ -35,7 +26,62 @@ work:  [ … | top ]          value: [ operands … ]
 pip install -e ".[dev]"
 ```
 
-## Quick start (RPN calc)
+Env for live LLM:
+
+```bash
+export OPENAI_API_KEY=sk-...
+# optional
+export OPENAI_BASE_URL=https://api.openai.com/v1
+export OPENAI_MODEL=gpt-4o-mini
+```
+
+## OpenAI-style LLM + token summary
+
+```python
+from dynamic_deep_agent import (
+    AgentHarness,
+    LLMController,
+    LLMPlanner,
+    OpenAIChatClient,
+    ToolRegistry,
+    tool,
+)
+
+@tool(description="Add a and b")
+def add(a: int, b: int) -> int:
+    return a + b
+
+client = OpenAIChatClient()  # reads OPENAI_* env
+reg = ToolRegistry()
+reg.register(add)
+
+harness = AgentHarness(
+    tools=reg,
+    controller=LLMController(client),
+    planner=LLMPlanner(client),
+)
+result = harness.run("Add 2 and 3 using tools")
+
+print(result.result)
+print(result.context.token_usage.summary())
+for item in result.context.summaries:
+    print(item["summary"], item["usage"])
+```
+
+`context.summaries` stores each stack **token summary** plus per-call usage.  
+`context.token_usage` is the cumulative prompt/completion/total token count.
+
+## Tokens
+
+| Kind | Role |
+|------|------|
+| `GOAL` | Needs expansion (plan) |
+| `VALUE` | Operand / literal |
+| `OP` | Operator / tool (`arity`, `tool`, `arg_names`, …) |
+
+`plan` / `do` are aliases for `goal` / `op`.
+
+## Rule-based (no LLM)
 
 ```python
 from dynamic_deep_agent import AgentHarness, ToolRegistry, op, tool, value
@@ -46,29 +92,12 @@ def add(a: int, b: int) -> int:
 
 reg = ToolRegistry()
 reg.register(add)
-
-# postfix: 2 3 +
 tokens = [
     value("2", data=2),
     value("3", data=3),
     op("add", tool="add", arity=2, arg_names=["a", "b"]),
 ]
-result = AgentHarness(tools=reg).run("2+3", initial_plan=tokens)
-assert result.result == 5
-```
-
-## Custom controller
-
-```python
-from dynamic_deep_agent import Decision, FrameKind
-from dynamic_deep_agent.builtins import RuleController
-
-def decide(stack, top, context):
-    if top.kind is FrameKind.GOAL:
-        return Decision.plan_push(summary=f"depth={len(stack)}")
-    return Decision.pop_execute()
-
-harness = AgentHarness(controller=RuleController(decide), planner=...)
+assert AgentHarness(tools=reg).run("2+3", initial_plan=tokens).result == 5
 ```
 
 ## Examples
@@ -76,6 +105,7 @@ harness = AgentHarness(controller=RuleController(decide), planner=...)
 ```bash
 python examples/calculator_agent.py
 python examples/research_agent.py
+OPENAI_API_KEY=... python examples/llm_agent.py
 ```
 
 ## Tests
