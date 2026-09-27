@@ -1,28 +1,33 @@
 # Dynamic Deep Agent
 
-DFS stack agent **harness**: **plan** by pushing, **do** by popping, finish when the stack is empty and you have a result.
+RPN-style stack agent **harness**: each step the agent looks at the **work stack** and **top**, then chooses:
+
+| Move | When | What happens |
+|------|------|----------------|
+| **pop + execute** | top is `VALUE` or `OP` | pop it; `VALUE` → value stack; `OP` → pop arity operands, run, push result |
+| **summary + plan + push** | top is `GOAL` | summarize stack situation, plan tokens, push them |
+
+When the work stack is empty, the **value stack** top is the answer.
 
 ```
-push GOAL (PLAN)
-   │
-   ▼
-pop PLAN ──► push [child1, child2, ...]     ← go deeper (DFS)
-   │
-   ▼
-pop DO    ──► run tool / actor → result
-   │
-   ▼
-… repeat until stack empty → last DO result
+work:  [ … | top ]          value: [ operands … ]
+              │
+              ▼
+     controller.decide(stack, top)
+         │              │
+         │              └─ PLAN_PUSH → summary → plan → push
+         └─ POP_EXECUTE → pop top → execute
 ```
 
-Only two work kinds:
+## Tokens
 
-| Kind | Meaning |
-|------|---------|
-| `PLAN` | Pop → decompose → **push** children (first child runs next) |
-| `DO` | Pop → execute tool/actor → keep result |
+| Kind | Role |
+|------|------|
+| `GOAL` | Needs expansion (plan) |
+| `VALUE` | Operand / literal |
+| `OP` | Operator / tool call (`arity`, `tool`, `arg_names`, …) |
 
-Push/pop also apply to the **tool-call stack** (enter tool / return).
+`plan` / `do` are aliases for `goal` / `op`.
 
 ## Install
 
@@ -30,40 +35,41 @@ Push/pop also apply to the **tool-call stack** (enter tool / return).
 pip install -e ".[dev]"
 ```
 
-## Quick start
+## Quick start (RPN calc)
 
 ```python
-from dynamic_deep_agent import AgentHarness, ToolRegistry, do, tool
-from dynamic_deep_agent.builtins import RulePlanner
+from dynamic_deep_agent import AgentHarness, ToolRegistry, op, tool, value
 
-@tool(description="Add two numbers")
+@tool()
 def add(a: int, b: int) -> int:
     return a + b
 
-registry = ToolRegistry()
-registry.register(add)
+reg = ToolRegistry()
+reg.register(add)
 
-def plan_fn(frame, context):
-    return [
-        do("2+3", tool="add", args={"a": 2, "b": 3}, store_as="sum"),
-        do("reuse", tool="add", args={"a": "$sum", "b": 0}),
-    ]
-
-harness = AgentHarness(tools=registry, planner=RulePlanner(plan_fn))
-result = harness.run("2+3")
-assert result.success and result.result == 5
-assert harness.work.empty()
+# postfix: 2 3 +
+tokens = [
+    value("2", data=2),
+    value("3", data=3),
+    op("add", tool="add", arity=2, arg_names=["a", "b"]),
+]
+result = AgentHarness(tools=reg).run("2+3", initial_plan=tokens)
+assert result.result == 5
 ```
 
-`$name` in tool args resolves from results stored with `store_as`.
+## Custom controller
 
-## Loop
+```python
+from dynamic_deep_agent import Decision, FrameKind
+from dynamic_deep_agent.builtins import RuleController
 
-1. `run(goal)` pushes a root `PLAN` (or an `initial_plan`).
-2. While the work stack is not empty: **pop**.
-3. `PLAN` → planner **pushes** children (DFS: newest / first child first).
-4. `DO` → tool registry **pushes/pops** the tool-call stack; result is kept.
-5. Empty work stack → `HarnessResult` with the last `DO` result.
+def decide(stack, top, context):
+    if top.kind is FrameKind.GOAL:
+        return Decision.plan_push(summary=f"depth={len(stack)}")
+    return Decision.pop_execute()
+
+harness = AgentHarness(controller=RuleController(decide), planner=...)
+```
 
 ## Examples
 
@@ -77,15 +83,4 @@ python examples/research_agent.py
 ```bash
 pip install -e ".[dev]"
 pytest
-```
-
-## Package layout
-
-```
-src/dynamic_deep_agent/
-  stack.py      # WorkStack, ToolCallStack
-  frames.py     # PLAN / DO (+ tool frames)
-  tools.py      # ToolRegistry with call-stack push/pop
-  harness.py    # DFS AgentHarness loop
-  builtins.py   # Small planners/actors for demos
 ```

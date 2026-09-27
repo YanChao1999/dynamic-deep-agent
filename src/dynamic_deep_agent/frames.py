@@ -1,4 +1,9 @@
-"""Work and tool frames that live on the harness stacks."""
+"""Work and tool frames — RPN-style tokens on the work stack.
+
+* ``GOAL`` — needs expansion (agent tends to summary + plan + push)
+* ``OP`` — ready to run (agent tends to pop + execute, like an RPN operator)
+* ``VALUE`` — operand / intermediate result sitting on the stack
+"""
 
 from __future__ import annotations
 
@@ -13,22 +18,16 @@ def _new_id() -> str:
 
 
 class FrameKind(str, Enum):
-    """DFS work kinds — only plan and do.
+    """RPN token kinds on the agent work stack."""
 
-    * ``PLAN`` — decompose: pop this frame, **push** children (go deeper)
-    * ``DO`` — leaf work: pop this frame, run a tool/actor, keep the result
-
-    The agent is depth-first: the most recently pushed child runs next.
-    When the work stack is empty, the run finishes with the last result.
-    """
-
-    PLAN = "plan"
-    DO = "do"
+    GOAL = "goal"
+    OP = "op"
+    VALUE = "value"
 
 
 @dataclass
 class WorkFrame:
-    """One item on the agent work stack."""
+    """One token on the agent work stack."""
 
     kind: FrameKind
     description: str
@@ -91,11 +90,24 @@ class ToolFrame:
         }
 
 
-def plan(description: str, **payload: Any) -> WorkFrame:
-    """Shorthand for a PLAN frame."""
-    return WorkFrame(kind=FrameKind.PLAN, description=description, payload=payload)
+def goal(description: str, **payload: Any) -> WorkFrame:
+    """Shorthand for a GOAL frame (needs plan)."""
+    return WorkFrame(kind=FrameKind.GOAL, description=description, payload=payload)
 
 
-def do(description: str, **payload: Any) -> WorkFrame:
-    """Shorthand for a DO frame."""
-    return WorkFrame(kind=FrameKind.DO, description=description, payload=payload)
+def op(description: str, **payload: Any) -> WorkFrame:
+    """Shorthand for an OP frame (pop + execute)."""
+    return WorkFrame(kind=FrameKind.OP, description=description, payload=payload)
+
+
+def value(description: str, *, data: Any = None, **payload: Any) -> WorkFrame:
+    """Shorthand for a VALUE frame (operand / result on the stack)."""
+    body = dict(payload)
+    if data is not None:
+        body.setdefault("value", data)
+    return WorkFrame(kind=FrameKind.VALUE, description=description, payload=body)
+
+
+# Aliases matching the plan/do vocabulary.
+plan = goal
+do = op

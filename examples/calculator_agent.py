@@ -1,12 +1,15 @@
-"""DFS demo: evaluate (2 + 3) * 4 by plan → push, do → pop.
+"""RPN-style calculator: (2 + 3) * 4 via stack + top decisions.
 
-No reduce step — each DO stores its result; the next DO reads it via $name.
-When the stack is empty, the last DO result is the answer.
+Work stack holds the program (next token on top). Value stack holds operands.
+The agent peeks at the work top:
+
+* VALUE / OP → **pop + execute**
+* GOAL → **summary + plan + push**
 """
 
 from __future__ import annotations
 
-from dynamic_deep_agent import AgentHarness, ToolRegistry, do, tool
+from dynamic_deep_agent import AgentHarness, ToolRegistry, op, tool, value
 from dynamic_deep_agent.builtins import RulePlanner
 
 
@@ -21,21 +24,15 @@ def mul(a: float, b: float) -> float:
 
 
 def make_planner() -> RulePlanner:
-    def plan_fn(frame, context):
-        # Root PLAN → push DO add, then DO mul (DFS: add runs first).
+    def plan_fn(frame, context, *, summary="", stack=()):
+        # Postfix for (2 + 3) * 4  ⇒  2  3  +  4  *
+        print(f"  [plan] summary: {summary}")
         return [
-            do(
-                "compute 2 + 3",
-                tool="add",
-                args={"a": 2, "b": 3},
-                store_as="sum",
-            ),
-            do(
-                "multiply sum by 4",
-                tool="mul",
-                args={"a": "$sum", "b": 4},
-                store_as="product",
-            ),
+            value("2", data=2),
+            value("3", data=3),
+            op("add", tool="add", arity=2, arg_names=["a", "b"]),
+            value("4", data=4),
+            op("mul", tool="mul", arity=2, arg_names=["a", "b"]),
         ]
 
     return RulePlanner(plan_fn)
@@ -46,20 +43,30 @@ def main() -> None:
     registry.register(add)
     registry.register(mul)
 
-    harness = AgentHarness(tools=registry, planner=make_planner())
+    def on_step(decision, top, context):
+        print(
+            f"→ top={top.kind.value}:{top.description!r} "
+            f"⇒ {decision.move.value}"
+            + (f" ({decision.reason})" if decision.reason else "")
+        )
+
+    harness = AgentHarness(tools=registry, planner=make_planner(), on_step=on_step)
     result = harness.run("(2 + 3) * 4")
 
+    print()
     print("success:", result.success)
     print("steps:", result.steps)
     print("answer:", result.result)
-    print("values:", result.context.values)
-    print("--- DFS trace (pop order) ---")
+    print("value_stack:", result.value_stack)
+    print("--- decisions ---")
     for event in result.context.trace:
-        frame = event.get("frame", {})
+        d = event.get("decision", {})
+        top = event.get("top", {})
         print(
-            f"step={event.get('step')} kind={frame.get('kind')} "
-            f"desc={frame.get('description')!r} result={frame.get('result')!r} "
-            f"stack_depth={event.get('stack_depth')}"
+            f"step={event.get('step')} move={d.get('move')} "
+            f"top={top.get('kind')}:{top.get('description')!r} "
+            f"result={event.get('result')!r} "
+            f"work={event.get('work_depth')} values={event.get('value_depth')}"
         )
 
 

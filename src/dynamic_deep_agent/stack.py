@@ -1,9 +1,8 @@
 """Generic LIFO stacks used by the harness.
 
-Two stacks play different roles in the DFS agent:
-
-* :class:`WorkStack` — agent work (push = plan deeper, pop = do top)
-* :class:`ToolCallStack` — nested tool invocations (call / return)
+* :class:`WorkStack` — program / goals (next token on top)
+* :class:`ToolCallStack` — nested tool call / return
+* Value stack lives on :class:`~dynamic_deep_agent.harness.AgentHarness.values`
 """
 
 from __future__ import annotations

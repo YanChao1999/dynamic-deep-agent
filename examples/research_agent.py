@@ -1,12 +1,11 @@
-"""DFS research demo: PLAN pushes children, DO runs tools, until result.
+"""Research demo: GOAL → summary+plan+push, then pop+execute each OP.
 
-Depth-first: the agent always pops the newest frame, so nested PLANs go
-deep before siblings. Tool calls use their own push/pop stack.
+The controller looks at stack + top each step (RPN-style field).
 """
 
 from __future__ import annotations
 
-from dynamic_deep_agent import AgentHarness, ToolRegistry, do, plan, tool
+from dynamic_deep_agent import AgentHarness, ToolRegistry, goal, op, tool
 from dynamic_deep_agent.builtins import RulePlanner
 
 
@@ -28,30 +27,33 @@ def join_notes(parts: list[str], sep: str = " | ") -> str:
 
 
 def make_planner() -> RulePlanner:
-    def plan_fn(frame, context):
-        if frame.description.startswith("research "):
-            # Nested PLAN: go deep on "research topics" before summarizing.
+    def plan_fn(frame, context, *, summary="", stack=()):
+        if frame.description.startswith("research"):
             topics = frame.payload.get("topics") or ["stack", "agent", "harness"]
-            children = [
-                do(f"lookup {topic}", tool="lookup", args={"topic": topic}, store_as=f"note_{topic}")
+            print(f"  [plan] {summary}")
+            steps = [
+                op(
+                    f"lookup {topic}",
+                    tool="lookup",
+                    args={"topic": topic},
+                    store_as=f"note_{topic}",
+                    arity=0,
+                )
                 for topic in topics
             ]
-            children.append(
-                do(
+            steps.append(
+                op(
                     "join notes",
                     tool="join_notes",
                     args={"parts": [f"$note_{t}" for t in topics]},
                     store_as="summary",
+                    arity=0,
                 )
             )
-            return children
+            return steps
 
-        # Root goal → one nested PLAN (DFS enters it immediately).
         return [
-            plan(
-                "research topics",
-                topics=["stack", "agent", "harness"],
-            )
+            goal("research topics", topics=["stack", "agent", "harness"]),
         ]
 
     return RulePlanner(plan_fn)
@@ -62,10 +64,9 @@ def main() -> None:
     registry.register(lookup)
     registry.register(join_notes)
 
-    def on_step(frame, context):
+    def on_step(decision, top, context):
         print(
-            f"→ pop {frame.kind.value:4} | {frame.description} "
-            f"(remaining_depth={context.tools.call_stack.depth})"
+            f"→ top={top.kind.value:5} | {top.description} ⇒ {decision.move.value}"
         )
 
     harness = AgentHarness(
@@ -79,7 +80,7 @@ def main() -> None:
     print("success:", result.success)
     print("steps:", result.steps)
     print("result:", result.result)
-    assert result.result == result.context.get_value("summary")
+    print("summary:", result.context.get_value("summary"))
 
 
 if __name__ == "__main__":
